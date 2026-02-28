@@ -143,6 +143,7 @@ fun SuperUserPager(
         derivedStateOf { 12.dp * (1f - scrollBehavior.state.collapsedFraction) }
     }
 
+    val hazeState = remember { HazeState() }
     val hazeStyle = if (enableBlur) {
         HazeStyle(
             backgroundColor = colorScheme.surface,
