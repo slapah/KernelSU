@@ -216,4 +216,5 @@
     <string name="settings_floating_bottom_bar_summary">Use Apple style floating bottom bar</string>
     <string name="settings_enable_glass">Liquid glass</string>
     <string name="settings_enable_glass_summary">Enable liquid glass effect for floating bottom bar</string>
+    <string name="show_only_primary_user_apps">Show only primary user apps</string>
 </resources>
