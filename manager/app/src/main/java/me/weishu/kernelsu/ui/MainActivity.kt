@@ -106,7 +106,7 @@ class MainActivity : ComponentActivity() {
             var pageScale by remember { mutableFloatStateOf(prefs.getFloat("page_scale", 1f)) }
             var enableBlur by remember { mutableStateOf(prefs.getBoolean("enable_blur", true)) }
             var enableFloatingBottomBar by remember { mutableStateOf(prefs.getBoolean("enable_floating_bottom_bar", false)) }
-            var enableFloatingBottomBarBlur by remember { mutableStateOf(prefs.getBoolean("enable_floating_bottom_bar_blur", true)) }
+            var enableFloatingBottomBarBlur by remember { mutableStateOf(prefs.getBoolean("enable_floating_bottom_bar_blur", false)) }
 
 
             val keyColor = remember(keyColorInt) { if (keyColorInt == 0) null else Color(keyColorInt) }
@@ -140,7 +140,7 @@ class MainActivity : ComponentActivity() {
                         "enable_blur" -> enableBlur = prefs.getBoolean("enable_blur", true)
                         "enable_floating_bottom_bar" -> enableFloatingBottomBar = prefs.getBoolean("enable_floating_bottom_bar", false)
                         "enable_floating_bottom_bar_blur" -> enableFloatingBottomBarBlur =
-                            prefs.getBoolean("enable_floating_bottom_bar_blur", true)
+                            prefs.getBoolean("enable_floating_bottom_bar_blur", false)
                     }
                 }
                 prefs.registerOnSharedPreferenceChangeListener(listener)
