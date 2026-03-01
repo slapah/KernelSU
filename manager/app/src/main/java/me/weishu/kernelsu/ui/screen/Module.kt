@@ -58,6 +58,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -166,16 +167,17 @@ private enum class ShortcutType {
     WebUI
 }
 
-@SuppressLint("StringFormatInvalid", "LocalContextGetResourceValueCall")
+@SuppressLint("LocalContextGetResourceValueCall", "StringFormatInvalid")
 @Composable
 fun ModulePager(
     navigator: Navigator,
     bottomInnerPadding: Dp
 ) {
     val viewModel = viewModel<ModuleViewModel>()
-    val modules = viewModel.moduleList
+    val uiState by viewModel.uiState.collectAsState()
+    val modules = uiState.moduleList
     val scope = rememberCoroutineScope()
-    val searchStatus by viewModel.searchStatus
+    val searchStatus = uiState.searchStatus
 
     val context = LocalContext.current
     var isInitialized by rememberSaveable { mutableStateOf(false) }
@@ -185,9 +187,9 @@ fun ModulePager(
     LaunchedEffect(Unit) {
         when {
             !isInitialized || modules.isEmpty() -> {
-                viewModel.checkModuleUpdate = prefs.getBoolean("module_check_update", true)
-                viewModel.sortEnabledFirst = prefs.getBoolean("module_sort_enabled_first", false)
-                viewModel.sortActionFirst = prefs.getBoolean("module_sort_action_first", false)
+                viewModel.setCheckModuleUpdate(prefs.getBoolean("module_check_update", true))
+                viewModel.setSortEnabledFirst(prefs.getBoolean("module_sort_enabled_first", false))
+                viewModel.setSortActionFirst(prefs.getBoolean("module_sort_action_first", false))
                 viewModel.fetchModuleList(checkUpdate = true)
                 isInitialized = true
             }
@@ -584,11 +586,12 @@ fun ModulePager(
                                     DropdownImpl(
                                         text = stringResource(R.string.module_sort_action_first),
                                         optionSize = 2,
-                                        isSelected = viewModel.sortActionFirst,
+                                        isSelected = uiState.sortActionFirst,
                                         onSelectedIndexChange = {
-                                            viewModel.sortActionFirst = !viewModel.sortActionFirst
+                                            val newValue = !uiState.sortActionFirst
+                                            viewModel.setSortActionFirst(newValue)
                                             prefs.edit {
-                                                putBoolean("module_sort_action_first", viewModel.sortActionFirst)
+                                                putBoolean("module_sort_action_first", newValue)
                                             }
                                             scope.launch {
                                                 viewModel.fetchModuleList()
@@ -600,11 +603,12 @@ fun ModulePager(
                                     DropdownImpl(
                                         text = stringResource(R.string.module_sort_enabled_first),
                                         optionSize = 2,
-                                        isSelected = viewModel.sortEnabledFirst,
+                                        isSelected = uiState.sortEnabledFirst,
                                         onSelectedIndexChange = {
-                                            viewModel.sortEnabledFirst = !viewModel.sortEnabledFirst
+                                            val newValue = !uiState.sortEnabledFirst
+                                            viewModel.setSortEnabledFirst(newValue)
                                             prefs.edit {
-                                                putBoolean("module_sort_enabled_first", viewModel.sortEnabledFirst)
+                                                putBoolean("module_sort_enabled_first", newValue)
                                             }
                                             scope.launch {
                                                 viewModel.fetchModuleList()
@@ -707,6 +711,7 @@ fun ModulePager(
         },
         popupHost = {
             searchStatus.SearchPager(
+                onSearchStatusChange = viewModel::updateSearchStatus,
                 defaultResult = {},
                 searchBarTopPadding = dynamicTopPadding,
             ) {
@@ -714,17 +719,17 @@ fun ModulePager(
                     Spacer(Modifier.height(6.dp))
                 }
                 items(
-                    viewModel.searchResults.value,
+                    uiState.searchResults,
                     key = { it.id },
                     contentType = { "module" }
                 ) { module ->
                     AnimatedVisibility(
-                        visible = viewModel.searchResults.value.isNotEmpty(),
+                        visible = uiState.searchResults.isNotEmpty(),
                         enter = fadeIn() + expandVertically(),
                         exit = fadeOut() + shrinkVertically()
                     ) {
                         val itemScope = rememberCoroutineScope()
-                        val updateInfoMap = viewModel.updateInfo
+                        val updateInfoMap = uiState.updateInfo
                         val currentModuleState = rememberUpdatedState(module)
                         val moduleUpdateInfo = updateInfoMap[module.id] ?: ModuleViewModel.ModuleUpdateInfo.Empty
 
@@ -828,6 +833,7 @@ fun ModulePager(
             else -> {
                 val layoutDirection = LocalLayoutDirection.current
                 searchStatus.SearchBox(
+                    onSearchStatusChange = viewModel::updateSearchStatus,
                     searchBarTopPadding = dynamicTopPadding,
                     contentPadding = PaddingValues(
                         top = innerPadding.calculateTopPadding(),
@@ -1054,8 +1060,9 @@ private fun ModuleList(
     bottomInnerPadding: Dp,
     boxHeight: MutableState<Dp>
 ) {
+    val uiState by viewModel.uiState.collectAsState()
     val layoutDirection = LocalLayoutDirection.current
-    val updateInfoMap = viewModel.updateInfo
+    val updateInfoMap = uiState.updateInfo
 
     var isRefreshing by rememberSaveable { mutableStateOf(false) }
     val pullToRefreshState = rememberPullToRefreshState()
