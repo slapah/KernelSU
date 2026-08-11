@@ -8,6 +8,7 @@
 #include <linux/user_namespace.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <linux/pid.h>
 
 #include "infra/symbol_resolver.h"
 #include "ksu_samsung_kdp.h"
@@ -20,7 +21,11 @@ enum samsung_kdp_cred_command {
 
 typedef struct cred *(*prepare_ro_creds_t)(struct cred *cred, int command, u64 task);
 typedef void (*kdp_assign_pgd_t)(struct task_struct *task);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+typedef unsigned int (*kdp_usecount_sub_and_test_t)(int nr, struct cred *cred);
+#else
 typedef unsigned int (*kdp_usecount_dec_and_test_t)(struct cred *cred);
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
 typedef long (*inc_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
 typedef bool (*dec_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
@@ -37,7 +42,11 @@ struct samsung_kdp_commit_work {
 
 static prepare_ro_creds_t prepare_ro_creds_fn;
 static kdp_assign_pgd_t kdp_assign_pgd_fn;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+static kdp_usecount_sub_and_test_t kdp_usecount_sub_and_test_fn;
+#else
 static kdp_usecount_dec_and_test_t kdp_usecount_dec_and_test_fn;
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
 static inc_rlimit_ucounts_t inc_rlimit_ucounts_fn;
 static dec_rlimit_ucounts_t dec_rlimit_ucounts_fn;
@@ -110,7 +119,11 @@ void ksu_samsung_kdp_put_cred(const struct cred *cred)
 #ifdef CONFIG_KSU_SAMSUNG_KDP
     struct cred *mutable_cred = (struct cred *)cred;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+    if (mutable_cred && kdp_usecount_sub_and_test_fn(1, mutable_cred))
+#else
     if (mutable_cred && kdp_usecount_dec_and_test_fn(mutable_cred))
+#endif
         __put_cred(mutable_cred);
 #else
     put_cred(cred);
@@ -122,12 +135,25 @@ int ksu_samsung_kdp_init(void)
 #ifdef CONFIG_KSU_SAMSUNG_KDP
     prepare_ro_creds_fn = (prepare_ro_creds_t)ksu_resolve_symbol_for_functable_hook("prepare_ro_creds");
     kdp_assign_pgd_fn = (kdp_assign_pgd_t)ksu_resolve_symbol_for_functable_hook("kdp_assign_pgd");
-    kdp_usecount_dec_and_test_fn = (kdp_usecount_dec_and_test_t)ksu_resolve_symbol_for_functable_hook(
-        "kdp_usecount_dec_and_test");
-    if (!prepare_ro_creds_fn || !kdp_assign_pgd_fn || !kdp_usecount_dec_and_test_fn) {
+    if (!prepare_ro_creds_fn || !kdp_assign_pgd_fn) {
         pr_err("Samsung KDP credential functions unavailable\n");
         return -ENOENT;
     }
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+    kdp_usecount_sub_and_test_fn = (kdp_usecount_sub_and_test_t)ksu_resolve_symbol_for_functable_hook(
+        "kdp_usecount_sub_and_test");
+    if (!kdp_usecount_sub_and_test_fn) {
+        pr_err("Samsung KDP credential functions unavailable\n");
+        return -ENOENT;
+    }
+#else
+    kdp_usecount_dec_and_test_fn = (kdp_usecount_dec_and_test_t)ksu_resolve_symbol_for_functable_hook(
+        "kdp_usecount_dec_and_test");
+    if (!kdp_usecount_dec_and_test_fn) {
+        pr_err("Samsung KDP credential functions unavailable\n");
+        return -ENOENT;
+    }
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
     inc_rlimit_ucounts_fn = (inc_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("inc_rlimit_ucounts");
     dec_rlimit_ucounts_fn = (dec_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("dec_rlimit_ucounts");
