@@ -23,7 +23,7 @@ static int ksu_samsung_defex_pre_handler(struct kprobe *probe, struct pt_regs *r
     struct task_struct *task = (struct task_struct *)regs->regs[0];
 
     (void)probe;
-    if (task == current && current_uid().val == 0 && is_ksu_domain())
+    if (task == current && current_uid().val == 0)
         regs->regs[0] = 0;
 
     return 0;
