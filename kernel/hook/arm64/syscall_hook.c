@@ -9,6 +9,7 @@
 #include "../patch_memory.h"
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
+#include "ksu.h" // ksu_hooks_live
 
 syscall_fn_t *ksu_syscall_table = NULL;
 int ksu_dispatcher_nr = -1;
@@ -201,6 +202,14 @@ void ksu_unregister_syscall_hook(int nr)
 
 bool ksu_has_syscall_hook(int nr)
 {
+    /*
+     * Late-load init race gate: until kernelsu_init() has finished building
+     * state, report no syscall as hooked so the sys_enter redirect and the
+     * dispatcher both fall through to the stock path. Acquire pairs with the
+     * release store of ksu_hooks_live at the end of kernelsu_init().
+     */
+    if (!smp_load_acquire(&ksu_hooks_live))
+        return false;
     if (nr < 0 || nr >= __NR_syscalls)
         return false;
     return READ_ONCE(syscall_hooks[nr]) != NULL;

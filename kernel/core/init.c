@@ -75,6 +75,10 @@ __attribute__((naked)) int __init kernelsu_init_early(void)
 struct cred *ksu_cred;
 bool ksu_late_loaded;
 
+/* See ksu.h: false until kernelsu_init() has finished; gates live hooks so they
+ * cannot fire into a half-initialized module during a late load. */
+bool ksu_hooks_live __read_mostly = false;
+
 #ifdef CONFIG_KSU_DEBUG
 bool allow_shell = true;
 #else
@@ -197,6 +201,15 @@ int __init kernelsu_init(void)
 
         ksu_file_wrapper_init();
     }
+
+    /*
+     * Every init step above is done: on the late-load path the SELinux policy
+     * swap, sid cache, cred escape, allowlist, syscall-hook manager, throne and
+     * observer are all set up and enforcement is on. Only now let KSU hooks act.
+     * Release ordering pairs with the acquire load in the hook fast paths so
+     * they observe all of the above before they start processing traffic.
+     */
+    smp_store_release(&ksu_hooks_live, true);
 
 #ifdef MODULE
 #ifndef CONFIG_KSU_DEBUG
