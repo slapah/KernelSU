@@ -6,6 +6,28 @@
 #include <linux/sched.h>
 #include <linux/workqueue.h>
 #include <linux/moduleparam.h>
+#include <linux/delay.h>
+
+/* GhostLock diagnostic trace (see ksu.h). Loader passes ghost_trace_phys; each
+ * step stores to p[0] and waits for the userspace spinner to ack via p[1]. */
+unsigned long long ksu_ghost_trace_phys;
+module_param_named(ghost_trace_phys, ksu_ghost_trace_phys, ullong, 0600);
+void ksu_ghost_trace(unsigned long long step)
+{
+    volatile unsigned long long *p;
+    int i;
+
+    if (!ksu_ghost_trace_phys)
+        return;
+    p = (volatile unsigned long long *)__va(ksu_ghost_trace_phys);
+    p[0] = step;
+    mb();
+    for (i = 0; i < 5000; i++) {
+        if (p[1] == step)
+            return;
+        udelay(1);
+    }
+}
 
 #include "policy/allowlist.h"
 #include "ksu_samsung_kdp.h"
@@ -210,6 +232,21 @@ int __init kernelsu_init(void)
      * they observe all of the above before they start processing traffic.
      */
     smp_store_release(&ksu_hooks_live, true);
+
+    /*
+     * GhostLock KDP diagnostic: when loaded via koload with a trace page, run
+     * the real grant-root path once here — while the koload spinner is alive to
+     * fsync each step — so a Samsung KDP/RKP panic in the credential install
+     * leaves the last-reached step in the panic-surviving log. escape_with_root_
+     * profile() is traced internally (steps 41-49) and the worker (90-99); the
+     * euid==0 early-abort is skipped under ghost_trace so the KDP commit runs.
+     * 0xFFFF means the whole grant path survived with no panic.
+     */
+    if (ksu_ghost_trace_phys) {
+        ksu_ghost_trace(40);
+        escape_with_root_profile();
+        ksu_ghost_trace(0xFFFF);
+    }
 
 #ifdef MODULE
 #ifndef CONFIG_KSU_DEBUG

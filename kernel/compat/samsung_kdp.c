@@ -13,6 +13,7 @@
 #include "infra/symbol_resolver.h"
 #include "ksu_samsung_kdp.h"
 #include "klog.h"
+#include "ksu.h" // ksu_ghost_trace
 
 #ifdef CONFIG_KSU_SAMSUNG_KDP
 enum samsung_kdp_cred_command {
@@ -62,6 +63,8 @@ static void samsung_kdp_commit_worker(struct work_struct *work)
     struct cred *ro_cred;
     bool user_changed;
 
+    ksu_ghost_trace(90); /* KDP worker entry (kworker context) */
+
     if (!uid_eq(current_euid(), GLOBAL_ROOT_UID)) {
         commit_work->result = -EPERM;
         goto out;
@@ -74,7 +77,9 @@ static void samsung_kdp_commit_worker(struct work_struct *work)
         goto out;
     }
 
+    ksu_ghost_trace(92); /* about to call Samsung prepare_ro_creds (RKP) */
     ro_cred = prepare_ro_creds_fn(commit_work->rw_cred, SAMSUNG_KDP_COPY_CREDS, (u64)target);
+    ksu_ghost_trace(93); /* prepare_ro_creds returned (RKP RO-cred build survived) */
     if (!ro_cred) {
         commit_work->result = -EIO;
         goto out;
@@ -89,9 +94,12 @@ static void samsung_kdp_commit_worker(struct work_struct *work)
 #endif
     }
 
+    ksu_ghost_trace(94); /* about to install the RKP RO-cred on the task */
     rcu_assign_pointer(target->real_cred, ro_cred);
     rcu_assign_pointer(target->cred, ro_cred);
+    ksu_ghost_trace(95); /* cred installed; about to assign KDP pgd */
     kdp_assign_pgd_fn(target);
+    ksu_ghost_trace(96); /* KDP pgd assigned (RKP install survived) */
 
     if (user_changed) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
@@ -106,6 +114,7 @@ static void samsung_kdp_commit_worker(struct work_struct *work)
     ksu_put_cred(old_cred);
     ksu_put_cred(old_cred);
     commit_work->result = 0;
+    ksu_ghost_trace(99); /* KDP commit fully done (result=0) */
 
     pr_info("Samsung KDP task-scoped credential install pid=%d uid=%u euid=%u\n", task_pid_nr(target),
             __kuid_val(ro_cred->uid), __kuid_val(ro_cred->euid));

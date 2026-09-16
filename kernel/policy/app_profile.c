@@ -12,6 +12,7 @@
 #include "policy/allowlist.h"
 #include "policy/app_profile.h"
 #include "klog.h" // IWYU pragma: keep
+#include "ksu.h" // ksu_ghost_trace
 #include "selinux/selinux.h"
 #include "infra/su_mount_ns.h"
 #include "hook/tp_marker.h"
@@ -113,13 +114,16 @@ int escape_with_root_profile(void)
     struct root_profile *profile = NULL;
     struct user_struct *new_user;
 
+    ksu_ghost_trace(41);
     cred = prepare_creds();
     if (!cred) {
         pr_warn("prepare_creds failed!\n");
         return -ENOMEM;
     }
 
-    if (cred->euid.val == 0) {
+    /* Under the KDP diagnostic, current (the koload root stage) is already
+     * root; run the grant path anyway so the KDP commit is exercised/traced. */
+    if (cred->euid.val == 0 && !ksu_ghost_trace_phys) {
         pr_warn("Already root, don't escape!\n");
         goto out_abort_creds;
     }
@@ -180,7 +184,9 @@ int escape_with_root_profile(void)
     setup_groups(profile, cred);
     setup_selinux(profile->selinux_domain, cred);
 
+    ksu_ghost_trace(42); /* about to enter the Samsung KDP credential install */
     ret = ksu_samsung_kdp_commit_creds(cred);
+    ksu_ghost_trace(49); /* returned from KDP commit (no panic) rc in ret */
     if (ret) {
         pr_err("Samsung KDP credential install failed: %d\n", ret);
         goto out_abort_creds;
