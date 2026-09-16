@@ -24,6 +24,16 @@ extern bool ksu_no_custom_rc;
  */
 extern bool ksu_hooks_live;
 
+/*
+ * GhostLock diagnostic trace. When the module is loaded via koload with
+ * ghost_trace_phys=<phys of a shared page>, ksu_ghost_trace(step) stores the
+ * step to that page and waits for the userspace spinner to ack, so each step
+ * is fsync'd to a panic-surviving log before the next runs. Used to pinpoint
+ * where the Samsung KDP/RKP credential install dies. Zero phys = no-op.
+ */
+extern unsigned long long ksu_ghost_trace_phys;
+void ksu_ghost_trace(unsigned long long step);
+
 static inline int startswith(char *s, char *prefix)
 {
     return strncmp(s, prefix, strlen(prefix));
