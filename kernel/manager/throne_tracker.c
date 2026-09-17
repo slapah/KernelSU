@@ -1,7 +1,10 @@
+#include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/list.h>
+#include <linux/namei.h>
 #include <linux/slab.h>
+#include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/version.h>
@@ -39,7 +42,24 @@ static void crown_manager(const char *apk, struct list_head *uid_data)
         if (strncmp(np->package, pkg, KSU_MAX_PACKAGE_NAME) == 0) {
             pr_info("Crowning manager: %s(uid=%d)\n", pkg, np->uid);
             ksu_set_manager_appid(np->uid);
-            break;
+            return;
+        }
+    }
+
+    /* Android 17 / Samsung: packages.list may be missing or unreadable.
+     * Fall back to the data-dir owner, which is the app UID. */
+    {
+        char data_path[KSU_MAX_PACKAGE_NAME + 32];
+        struct path p;
+
+        snprintf(data_path, sizeof(data_path), "/data/data/%s", pkg);
+        if (!kern_path(data_path, LOOKUP_FOLLOW, &p)) {
+            uid_t uid = from_kuid(&init_user_ns, i_uid_read(d_inode(p.dentry)));
+            path_put(&p);
+            pr_info("Crowning manager via data dir: %s(uid=%d)\n", pkg, uid);
+            ksu_set_manager_appid(uid % PER_USER_RANGE);
+        } else {
+            pr_err("Failed to stat %s for manager uid\n", data_path);
         }
     }
 }
@@ -106,6 +126,18 @@ FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name, int name
     if (snprintf(dirpath, DATA_PATH_LEN, "%s/%.*s", my_ctx->parent_dir, namelen, name) >= DATA_PATH_LEN) {
         pr_err("Path too long: %s/%.*s\n", my_ctx->parent_dir, namelen, name);
         return FILLDIR_ACTOR_CONTINUE;
+    }
+
+    if (d_type == DT_UNKNOWN) {
+        struct path kpath;
+        if (!kern_path(dirpath, LOOKUP_FOLLOW, &kpath)) {
+            umode_t mode = d_inode(kpath.dentry)->i_mode;
+            if (S_ISDIR(mode))
+                d_type = DT_DIR;
+            else if (S_ISREG(mode))
+                d_type = DT_REG;
+            path_put(&kpath);
+        }
     }
 
     if (d_type == DT_DIR && my_ctx->depth > 0 && (my_ctx->stop && !*my_ctx->stop)) {
@@ -245,14 +277,19 @@ static bool is_uid_exist(uid_t uid, char *package, void *data)
 
 void track_throne(bool prune_only)
 {
-    struct file *fp = filp_open(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
-    if (IS_ERR(fp)) {
-        pr_err("%s: open " SYSTEM_PACKAGES_LIST_PATH " failed: %ld\n", __func__, PTR_ERR(fp));
-        return;
-    }
-
     struct list_head uid_list;
+    struct file *fp;
+
     INIT_LIST_HEAD(&uid_list);
+
+    fp = filp_open(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
+    if (IS_ERR(fp)) {
+        pr_err("%s: open " SYSTEM_PACKAGES_LIST_PATH " failed: %ld, searching anyway\n",
+               __func__, PTR_ERR(fp));
+        if (!prune_only)
+            search_manager("/data/app", 2, &uid_list);
+        goto prune;
+    }
 
     char chr = 0;
     loff_t pos = 0;
