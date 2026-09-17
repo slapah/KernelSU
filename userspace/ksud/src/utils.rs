@@ -211,13 +211,26 @@ pub fn stage_daemon() -> Result<()> {
 pub fn stage_daemon_from(staged_exe: impl AsRef<Path>) -> Result<()> {
     ensure_dir_exists(defs::ADB_DIR)?;
 
-    std::fs::rename(staged_exe.as_ref(), defs::DAEMON_PATH).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            staged_exe.as_ref().display(),
-            defs::DAEMON_PATH
-        )
-    })?;
+    let staged = staged_exe.as_ref();
+    if staged.exists() {
+        std::fs::rename(staged, defs::DAEMON_PATH).with_context(|| {
+            format!(
+                "Failed to rename {} to {}",
+                staged.display(),
+                defs::DAEMON_PATH
+            )
+        })?;
+    } else {
+        // No pre-staged daemon (e.g. an exploit-driven late-load with no helper
+        // to copy .ksud-stage first). Fall back to our own running binary.
+        std::fs::copy("/proc/self/exe", defs::DAEMON_PATH).with_context(|| {
+            format!(
+                "Failed to copy /proc/self/exe to {} ({} absent)",
+                defs::DAEMON_PATH,
+                staged.display()
+            )
+        })?;
+    }
     chown(defs::DAEMON_PATH, Some(Uid::ROOT), Some(Gid::ROOT))?;
     #[cfg(unix)]
     set_permissions(defs::DAEMON_PATH, Permissions::from_mode(0o755))?;
