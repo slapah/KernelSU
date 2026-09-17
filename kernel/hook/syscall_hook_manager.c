@@ -26,7 +26,7 @@
 
 static bool syscall_hook_manager_initialized;
 
-#if defined(CONFIG_KSU_SAMSUNG_RKP) && defined(CONFIG_KRETPROBES) && defined(__aarch64__)
+#if defined(CONFIG_KRETPROBES) && defined(__aarch64__)
 struct ksu_setresuid_task_work {
     struct callback_head callback;
     uid_t old_uid;
@@ -427,7 +427,7 @@ void __init ksu_syscall_hook_manager_init(void)
 
     if (ksu_dispatcher_nr < 0) {
         pr_warn("hook_manager: dispatcher unavailable; syscall event hooks disabled\n");
-#if defined(CONFIG_KSU_SAMSUNG_RKP) && defined(CONFIG_KRETPROBES) && defined(__aarch64__)
+#if defined(CONFIG_KRETPROBES) && defined(__aarch64__)
         samsung_setresuid_hook_init();
         ret = samsung_sucompat_hook_init();
         if (ret)
@@ -470,7 +470,7 @@ void __exit ksu_syscall_hook_manager_exit(void)
     pr_info("hook_manager: ksu_hook_manager_exit called\n");
 
     if (!syscall_hook_manager_initialized) {
-#if defined(CONFIG_KSU_SAMSUNG_RKP) && defined(CONFIG_KRETPROBES) && defined(__aarch64__)
+#if defined(CONFIG_KRETPROBES) && defined(__aarch64__)
         samsung_sucompat_hook_exit();
         samsung_setresuid_hook_exit();
 #endif
