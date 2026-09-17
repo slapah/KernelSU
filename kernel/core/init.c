@@ -108,6 +108,25 @@ bool allow_shell = false;
 #endif
 module_param(allow_shell, bool, 0);
 
+#include "manager/manager_identity.h"
+
+static int manager_uid;
+static int set_manager_uid(const char *val, const struct kernel_param *kp)
+{
+	int rv = param_set_int(val, kp);
+
+	if (!rv && manager_uid > 0) {
+		ksu_set_manager_appid((uid_t)manager_uid);
+		pr_info("manager_uid param: crowned %d\n", manager_uid);
+	}
+	return rv;
+}
+static const struct kernel_param_ops manager_uid_ops = {
+	.set = set_manager_uid,
+	.get = param_get_int,
+};
+module_param_cb(manager_uid, &manager_uid_ops, &manager_uid, 0644);
+
 bool ksu_no_custom_rc = false;
 module_param_named(norc, ksu_no_custom_rc, bool, 0);
 
@@ -205,6 +224,8 @@ int __init kernelsu_init(void)
         ksu_file_wrapper_init();
 
         ksu_boot_completed = true;
+        if (manager_uid > 0)
+            ksu_set_manager_appid((uid_t)manager_uid);
         track_throne(false);
 
         if (!getenforce()) {
@@ -250,7 +271,10 @@ int __init kernelsu_init(void)
 
 #ifdef MODULE
 #ifndef CONFIG_KSU_DEBUG
-    kobject_del(&THIS_MODULE->mkobj.kobj);
+    /* Keep sysfs on late-load so ksud can write manager_uid after DEFEX is
+     * bypassed. Hidden for normal boot LKM to avoid leaking the module. */
+    if (!ksu_late_loaded)
+        kobject_del(&THIS_MODULE->mkobj.kobj);
 #endif
 #endif
     return 0;
