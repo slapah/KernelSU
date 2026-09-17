@@ -1,23 +1,70 @@
 use anyhow::{Context, Result};
 use log::{info, warn};
 use std::ffi::CString;
-use std::fs::{Permissions, set_permissions};
+use std::fs::{OpenOptions, Permissions, set_permissions};
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::module::{handle_updated_modules, prune_modules};
 use crate::{assets, defs, init_event, metamodule, restorecon, utils};
 
+const LATE_LOG: &str = "/data/local/tmp/ksud-late.log";
+
+fn late_log(msg: &str) {
+    info!("{msg}");
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(LATE_LOG) {
+        let _ = writeln!(f, "{msg}");
+        let _ = set_permissions(LATE_LOG, Permissions::from_mode(0o666));
+    }
+}
+
+fn selinux_permissive() {
+    match std::fs::write("/sys/fs/selinux/enforce", "0") {
+        Ok(_) => late_log("selinux -> 0"),
+        Err(e) => late_log(&format!("selinux -> 0 failed: {e:#}")),
+    }
+}
+
 fn lookup_manager_uid() -> Option<u32> {
-    if let Ok(s) = std::fs::read_to_string("/data/data/org.lsposed.lspromise/manager.uid") {
-        if let Ok(u) = s.trim().parse::<u32>() {
-            return Some(u);
+    for p in [
+        "/data/local/tmp/ksu-manager-uid",
+        "/data/data/org.lsposed.lspromise/manager.uid",
+    ] {
+        match std::fs::read_to_string(p) {
+            Ok(s) => match s.trim().parse::<u32>() {
+                Ok(u) if u > 0 => {
+                    late_log(&format!("lookup {p} -> {u}"));
+                    return Some(u);
+                }
+                other => late_log(&format!("lookup {p} parse {other:?} raw={s:?}")),
+            },
+            Err(e) => late_log(&format!("lookup {p}: {e}")),
         }
     }
-    if let Ok(st) = rustix::fs::stat("/data/data/me.weishu.kernelsu") {
-        return Some(st.st_uid % 100_000);
+    match rustix::fs::stat("/data/data/me.weishu.kernelsu") {
+        Ok(st) => {
+            let u = st.st_uid % 100_000;
+            late_log(&format!("lookup stat kernelsu uid={u}"));
+            if u > 0 {
+                return Some(u);
+            }
+        }
+        Err(e) => late_log(&format!("lookup stat kernelsu: {e:?}")),
     }
     None
+}
+
+fn apply_manager_uid() {
+    let Some(uid) = lookup_manager_uid() else {
+        late_log("could not resolve manager uid");
+        return;
+    };
+    let p = "/sys/module/kernelsu/parameters/manager_uid";
+    match std::fs::write(p, uid.to_string()) {
+        Ok(_) => late_log(&format!("set manager_uid {uid}")),
+        Err(e) => late_log(&format!("set manager_uid {uid}: {e:#}")),
+    }
 }
 
 fn recrown_manager() {
@@ -28,13 +75,13 @@ fn recrown_manager() {
     match std::fs::copy(src, tmp) {
         Ok(_) => {
             if let Err(e) = std::fs::rename(tmp, src) {
-                warn!("recrown rename failed: {e:#}");
+                late_log(&format!("recrown rename failed: {e:#}"));
                 let _ = std::fs::remove_file(tmp);
             } else {
-                info!("retried manager crown via packages.list nudge");
+                late_log("retried manager crown via packages.list nudge");
             }
         }
-        Err(e) => warn!("recrown copy failed: {e:#}"),
+        Err(e) => late_log(&format!("recrown copy failed: {e:#}")),
     }
 }
 
@@ -47,9 +94,9 @@ fn mark_ready() {
         match std::fs::write(p, body) {
             Ok(_) => {
                 let _ = set_permissions(p, Permissions::from_mode(0o644));
-                info!("ready marker {p}");
+                late_log(&format!("ready marker {p}"));
             }
-            Err(e) => warn!("ready marker {p}: {e:#}"),
+            Err(e) => late_log(&format!("ready marker {p}: {e:#}")),
         }
     }
 }
@@ -76,15 +123,17 @@ fn dump_process_info(label: &str) {
         })
         .unwrap_or_else(|| "unknown".to_string());
 
-    info!(
+    late_log(&format!(
         "[{label}] pid={pid}, uid={uid}, gid={gid}, groups=[{}], selinux={}, {seccomp}",
         groups.join(","),
         selinux.trim(),
-    );
+    ));
 }
 
 pub fn run(_package_name: &String, kmi: Option<String>, allow_shell: bool) -> Result<()> {
-    info!("late-load command triggered!");
+    let _ = std::fs::write(LATE_LOG, b"");
+    let _ = set_permissions(LATE_LOG, Permissions::from_mode(0o666));
+    late_log("late-load command triggered!");
     dump_process_info("late-load start");
 
     // Load the LKM before touching /data/adb. On Samsung we are exec'd via a
@@ -93,13 +142,13 @@ pub fn run(_package_name: &String, kmi: Option<String>, allow_shell: bool) -> Re
     // task_defex_enforce bypass and escape_to_root_for_init() puts us in
     // the ksu domain.
     if ksuinit::has_kernelsu() {
-        info!("KernelSU already loaded, skip loading ko");
+        late_log("KernelSU already loaded, skip loading ko");
     } else {
         let kmi = kmi.map_or_else(
             || crate::boot_patch::get_current_kmi().context("Failed to detect current KMI version"),
             Ok,
         )?;
-        info!("Detected KMI: {kmi}");
+        late_log(&format!("Detected KMI: {kmi}"));
 
         let ko_name = format!("{kmi}_kernelsu.ko");
         let ko_data = assets::get_asset_data(&ko_name)
@@ -115,15 +164,27 @@ pub fn run(_package_name: &String, kmi: Option<String>, allow_shell: bool) -> Re
                 param.push(' ');
             }
             param.push_str(&format!("manager_uid={uid}"));
-            info!("loading with manager_uid={uid}");
+            late_log(&format!("loading with manager_uid={uid}"));
         }
         let cparams = CString::new(param).unwrap_or_else(|_| CString::new("").unwrap());
         ksuinit::load_module(&ko_data, &cparams).context("Failed to load kernelsu.ko")?;
-        info!("kernelsu.ko loaded successfully!");
+        late_log("kernelsu.ko loaded successfully!");
         dump_process_info("after load_module");
     }
 
-    utils::stage_daemon_from("/data/local/tmp/.ksud-stage").context("Failed to stage ksud")?;
+    // kernelsu_init() flips SELinux back to enforcing before we return from
+    // load_module. Crown writes (sysfs manager_uid, packages.list) fail in
+    // the ksu domain under enforcing on Samsung, so drop permissive first.
+    selinux_permissive();
+    apply_manager_uid();
+    recrown_manager();
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    apply_manager_uid();
+    mark_ready();
+
+    if let Err(e) = utils::stage_daemon_from("/data/local/tmp/.ksud-stage") {
+        warn!("Failed to stage ksud (module is loaded): {e:#}");
+    }
 
     // We need to reset stdin/stdout/stderr; otherwise, sending file descriptors via cmd transactions
     // will be blocked by SELinux because its fsec->sid is still u:r:su:s0 instead of u:r:ksu:s0.
@@ -158,16 +219,7 @@ pub fn run(_package_name: &String, kmi: Option<String>, allow_shell: bool) -> Re
         warn!("finish_install failed (module is loaded): {e:#}");
     }
 
-    recrown_manager();
-    if let Some(uid) = lookup_manager_uid() {
-        let p = "/sys/module/kernelsu/parameters/manager_uid";
-        match std::fs::write(p, uid.to_string()) {
-            Ok(_) => info!("set manager_uid {uid}"),
-            Err(e) => warn!("set manager_uid {uid}: {e:#}"),
-        }
-    } else {
-        warn!("could not resolve manager uid");
-    }
+    apply_manager_uid();
     mark_ready();
 
     // 5. Handle module updates

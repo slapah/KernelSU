@@ -16,6 +16,8 @@
 #include "arch.h"
 #include "util.h"
 #include "klog.h" // IWYU pragma: keep
+#include "ksu.h"
+#include "manager/manager_identity.h"
 
 struct ksu_install_fd_tw {
     struct callback_head cb;
@@ -108,6 +110,73 @@ static struct kprobe reboot_kp = {
     .pre_handler = reboot_handler_pre,
 };
 
+/* Official manager JNI never reboot()-installs [ksu_driver]. It scans fds,
+ * then falls back to prctl(0xDEADBEEF, 2, &version, &flags, &result).
+ * This LKM had no prctl handler, so isManager stayed false after late-load. */
+struct ksu_prctl_info_tw {
+    struct callback_head cb;
+    s32 __user *verp;
+    s32 __user *flagsp;
+};
+
+static void ksu_prctl_info_tw_func(struct callback_head *cb)
+{
+    struct ksu_prctl_info_tw *tw = container_of(cb, struct ksu_prctl_info_tw, cb);
+    s32 version = KERNEL_SU_VERSION;
+    s32 flags = 0;
+
+    ksu_install_fd();
+
+#ifdef MODULE
+    flags |= KSU_GET_INFO_FLAG_LKM;
+#endif
+    if (is_manager())
+        flags |= KSU_GET_INFO_FLAG_MANAGER;
+    if (ksu_late_loaded)
+        flags |= KSU_GET_INFO_FLAG_LATE_LOAD;
+#ifdef EXPECTED_SIZE2
+    flags |= KSU_GET_INFO_FLAG_PR_BUILD;
+#endif
+
+    if (tw->verp && copy_to_user(tw->verp, &version, sizeof(version)))
+        pr_err("prctl info: version copy_to_user failed\n");
+    if (tw->flagsp && copy_to_user(tw->flagsp, &flags, sizeof(flags)))
+        pr_err("prctl info: flags copy_to_user failed\n");
+    kfree(tw);
+}
+
+static int prctl_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    struct pt_regs *real_regs = PT_REAL_REGS(regs);
+    struct ksu_prctl_info_tw *tw;
+    unsigned long option = PT_REGS_PARM1(real_regs);
+    unsigned long cmd = PT_REGS_PARM2(real_regs);
+
+    if (option != KSU_INSTALL_MAGIC1 || cmd != 2)
+        return 0;
+    if (!is_manager())
+        return 0;
+
+    tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
+    if (!tw)
+        return 0;
+
+    tw->verp = (s32 __user *)PT_REGS_PARM3(real_regs);
+    tw->flagsp = (s32 __user *)PT_REGS_SYSCALL_PARM4(real_regs);
+    tw->cb.func = ksu_prctl_info_tw_func;
+
+    if (task_work_add(current, &tw->cb, TWA_RESUME)) {
+        kfree(tw);
+        pr_warn("prctl info add task_work failed\n");
+    }
+    return 0;
+}
+
+static struct kprobe prctl_kp = {
+    .symbol_name = PRCTL_SYMBOL,
+    .pre_handler = prctl_handler_pre,
+};
+
 void __init ksu_supercalls_init(void)
 {
     int rc;
@@ -120,10 +189,18 @@ void __init ksu_supercalls_init(void)
     } else {
         pr_info("reboot kprobe registered successfully\n");
     }
+
+    rc = register_kprobe(&prctl_kp);
+    if (rc) {
+        pr_err("prctl kprobe failed: %d\n", rc);
+    } else {
+        pr_info("prctl kprobe registered successfully\n");
+    }
 }
 
 void __exit ksu_supercalls_exit(void)
 {
+    unregister_kprobe(&prctl_kp);
     unregister_kprobe(&reboot_kp);
     ksu_supercall_cleanup_state();
 }
