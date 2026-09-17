@@ -67,6 +67,12 @@ endif
 ifeq ($(CONFIG_KSU_SAMSUNG_KDP),y)
 ccflags-y += -DCONFIG_KSU_SAMSUNG_KDP=1
 endif
+# Out-of-tree GKI LKM on Samsung: vanilla commit_creds is rejected by RKP,
+# so grant-root fails in the manager. Always compile the KDP cred path;
+# symbols are resolved from kallsyms at load.
+ifndef CONFIG_KSU_SAMSUNG_KDP
+ccflags-y += -DCONFIG_KSU_SAMSUNG_KDP=1
+endif
 ifeq ($(CONFIG_KSU_SAMSUNG_RKP),y)
 ccflags-y += -DCONFIG_KSU_SAMSUNG_RKP=1
 endif

@@ -145,15 +145,16 @@ int ksu_samsung_kdp_init(void)
     prepare_ro_creds_fn = (prepare_ro_creds_t)ksu_resolve_symbol_for_functable_hook("prepare_ro_creds");
     kdp_assign_pgd_fn = (kdp_assign_pgd_t)ksu_resolve_symbol_for_functable_hook("kdp_assign_pgd");
     if (!prepare_ro_creds_fn || !kdp_assign_pgd_fn) {
-        pr_err("Samsung KDP credential functions unavailable\n");
-        return -ENOENT;
+        pr_err("Samsung KDP credential functions unavailable; grant-root will fail on RKP\n");
+        return 0;
     }
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
     kdp_usecount_sub_and_test_fn = (kdp_usecount_sub_and_test_t)ksu_resolve_symbol_for_functable_hook(
         "kdp_usecount_sub_and_test");
     if (!kdp_usecount_sub_and_test_fn) {
-        pr_err("Samsung KDP credential functions unavailable\n");
-        return -ENOENT;
+        pr_err("Samsung KDP usecount function unavailable; grant-root will fail on RKP\n");
+        prepare_ro_creds_fn = NULL;
+        return 0;
     }
 #else
     kdp_usecount_dec_and_test_fn = (kdp_usecount_dec_and_test_t)ksu_resolve_symbol_for_functable_hook(
@@ -167,8 +168,9 @@ int ksu_samsung_kdp_init(void)
     inc_rlimit_ucounts_fn = (inc_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("inc_rlimit_ucounts");
     dec_rlimit_ucounts_fn = (dec_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("dec_rlimit_ucounts");
     if (!inc_rlimit_ucounts_fn || !dec_rlimit_ucounts_fn) {
-        pr_err("Samsung KDP ucounts functions unavailable\n");
-        return -ENOENT;
+        pr_err("Samsung KDP ucounts functions unavailable; grant-root will fail on RKP\n");
+        prepare_ro_creds_fn = NULL;
+        return 0;
     }
 #endif
 
@@ -186,6 +188,9 @@ int ksu_samsung_kdp_commit_creds(struct cred *cred)
 #ifdef CONFIG_KSU_SAMSUNG_KDP
     struct samsung_kdp_commit_work commit_work;
     bool queued;
+
+    if (!prepare_ro_creds_fn || !kdp_assign_pgd_fn)
+        return commit_creds(cred);
 
     if (!cred)
         return -EINVAL;
