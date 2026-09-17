@@ -355,11 +355,10 @@ void track_throne(bool prune_only)
     }
 
     if (!manager_exist) {
-        if (ksu_is_manager_appid_valid()) {
-            pr_info("manager is uninstalled, invalidate it!\n");
-            ksu_invalidate_manager_uid();
-            goto prune;
-        }
+        /* Do NOT invalidate a manager_uid set via module param / sysfs.
+         * On Samsung Android 17 packages.list is often unreadable or a
+         * different format, so the uid list misses the manager and the
+         * old "uninstalled" path wiped the crown every late-load. */
         pr_info("Searching manager...\n");
         search_manager("/data/app", 2, &uid_list);
         pr_info("Search manager finished\n");
