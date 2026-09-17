@@ -80,7 +80,24 @@ pub fn run(_package_name: &String, kmi: Option<String>, allow_shell: bool) -> Re
         warn!("clear temp configs failed: {e}");
     }
 
-    utils::finish_install(None).context("Failed to finish ksud installation")?;
+    // finish_install extracts assets into /data/adb/ksu/bin and restorecons
+    // them. The module re-enabled SELinux enforcing during its init, and on
+    // Samsung the ksu domain hits EPERM writing those under enforcing. We are
+    // uid 0 in the ksu domain here, so drop to permissive for the install and
+    // restore after (matches the permissive window the exploit ran under).
+    let was_enforcing = std::fs::read_to_string("/sys/fs/selinux/enforce")
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false);
+    if was_enforcing {
+        if let Err(e) = std::fs::write("/sys/fs/selinux/enforce", "0") {
+            warn!("could not drop SELinux to permissive for install: {e}");
+        }
+    }
+    let install_result = utils::finish_install(None).context("Failed to finish ksud installation");
+    if was_enforcing {
+        let _ = std::fs::write("/sys/fs/selinux/enforce", "1");
+    }
+    install_result?;
 
     // 5. Handle module updates
     if let Err(e) = handle_updated_modules() {
