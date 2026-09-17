@@ -18,6 +18,9 @@
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
 #include "manager/manager_identity.h"
+#include "infra/seccomp_cache.h"
+#include <linux/seccomp.h>
+#include <asm/unistd.h>
 
 struct ksu_install_fd_tw {
     struct callback_head cb;
@@ -47,13 +50,16 @@ int ksu_install_fd(void)
     struct file *filp;
     int fd;
 
-    fd = get_unused_fd_flags(O_CLOEXEC);
+    /* No O_CLOEXEC: the manager execs libksud.so for `debug su`, and that
+     * child must inherit [ksu_driver]. With CLOEXEC it falls back to
+     * reboot(DEADBEEF) which Android app seccomp kills (SIGSYS syscall 142). */
+    fd = get_unused_fd_flags(0);
     if (fd < 0) {
         pr_err("ksu_install_fd: failed to get unused fd\n");
         return fd;
     }
 
-    filp = anon_inode_getfile("[ksu_driver]", &anon_ksu_fops, NULL, O_RDWR | O_CLOEXEC);
+    filp = anon_inode_getfile("[ksu_driver]", &anon_ksu_fops, NULL, O_RDWR);
     if (IS_ERR(filp)) {
         pr_err("ksu_install_fd: failed to create anon inode file\n");
         put_unused_fd(fd);
@@ -125,6 +131,8 @@ static void ksu_prctl_info_tw_func(struct callback_head *cb)
     s32 version = KERNEL_SU_VERSION;
     s32 flags = 0;
 
+    if (current->seccomp.mode == SECCOMP_MODE_FILTER)
+        ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
     ksu_install_fd();
 
 #ifdef MODULE
