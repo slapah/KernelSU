@@ -54,7 +54,7 @@ static void crown_manager(const char *apk, struct list_head *uid_data)
 
         snprintf(data_path, sizeof(data_path), "/data/data/%s", pkg);
         if (!kern_path(data_path, LOOKUP_FOLLOW, &p)) {
-            uid_t uid = from_kuid(&init_user_ns, i_uid_read(d_inode(p.dentry)));
+            uid_t uid = i_uid_read(d_inode(p.dentry));
             path_put(&p);
             pr_info("Crowning manager via data dir: %s(uid=%d)\n", pkg, uid);
             ksu_set_manager_appid(uid % PER_USER_RANGE);
