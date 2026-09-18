@@ -23,7 +23,9 @@ static int ksu_samsung_defex_pre_handler(struct kprobe *probe, struct pt_regs *r
     struct task_struct *task = (struct task_struct *)regs->regs[0];
 
     (void)probe;
-    if (task == current && current_uid().val == 0 && is_ksu_domain())
+    /* After KDP grant, libksud is uid 0 but may not be ksu_domain yet.
+     * DEFEX still has the app uid and kills the process (credential violation). */
+    if (task == current && current_uid().val == 0)
         regs->regs[0] = 0;
 
     return 0;
@@ -43,14 +45,14 @@ int ksu_samsung_defex_init(void)
     defex_get_task_creds = (defex_get_task_creds_t)ksu_resolve_symbol_for_functable_hook("get_task_creds");
     defex_set_task_creds = (defex_set_task_creds_t)ksu_resolve_symbol_for_functable_hook("set_task_creds");
     if (!defex_get_task_creds || !defex_set_task_creds) {
-        pr_err("Samsung DEFEX credential functions unavailable\n");
-        return -ENOENT;
+        pr_err("Samsung DEFEX credential functions unavailable; uid0 may still trip DEFEX\n");
+        return 0;
     }
 
     ret = register_kprobe(&defex_enforce_kprobe);
     if (ret) {
-        pr_err("Samsung DEFEX enforce hook unavailable: %d\n", ret);
-        return ret;
+        pr_err("Samsung DEFEX enforce hook unavailable: %d; uid0 may still trip DEFEX\n", ret);
+        return 0;
     }
     defex_enforce_hooked = true;
 
@@ -73,6 +75,8 @@ void ksu_samsung_defex_sync_current(void)
 {
 #ifdef CONFIG_KSU_SAMSUNG_DEFEX
     const struct cred *cred = current_cred();
+    if (!defex_get_task_creds || !defex_set_task_creds)
+        return;
     unsigned int stored_uid;
     unsigned int stored_fsuid;
     unsigned int stored_egid;
